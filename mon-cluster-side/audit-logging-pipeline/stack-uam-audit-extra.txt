@@ -1,0 +1,192 @@
+PUT _ingest/pipeline/stack-uam-audit-extra
+{
+  "version": 8,
+  "description": "Additional parsing of Elasticsearch audit logs. Last update 2024-07-08.",
+  "processors": [
+    {
+      "drop": {
+        "if": "ctx?.url?.original == \"/_security/user/_has_privileges\" || ctx?.url?.original == \"/_security/_authenticate\"",
+        "ignore_failure": true
+      }
+    },
+    {
+      "dissect": {
+        "field": "elasticsearch.audit.opaque_id",
+        "pattern": "%{elasticsearch.uam.search.id};%{elasticsearch.uam.origination}:%{}:%{elasticsearch.uam.application}:%{elasticsearch.uam.saved_object.id}",
+        "ignore_missing": true,
+        "ignore_failure": true
+      }
+    },
+    {
+      "set": {
+        "field": "elasticsearch.uam.opaque_id",
+        "value": "{{elasticsearch.audit.opaque_id}}",
+        "ignore_failure": true
+      }
+    },
+    {
+      "dissect": {
+        "field": "url.original",
+        "pattern": "/%{elasticsearch.uam.search.index}/%{}",
+        "ignore_missing": true,
+        "ignore_failure": true,
+        "if": "ctx?.elasticsearch?.uam?.application != '' && ctx?.elasticsearch?.uam?.application != null"
+      }
+    },
+    {
+      "remove": {
+        "field": "elasticsearch.uam.search.index",
+        "if": "ctx?.elasticsearch?.uam?.search?.index != null && ctx?.elasticsearch?.uam?.search?.index != '' && (ctx?.elasticsearch?.uam?.search?.index).indexOf('_') == 0",
+        "ignore_missing": true,
+        "ignore_failure": true
+      }
+    },
+    {
+      "json": {
+        "field": "http.request.body.content",
+        "target_field": "temp",
+        "ignore_failure": true
+      }
+    },
+    {
+      "convert": {
+        "field": "temp.query",
+        "type": "string",
+        "ignore_failure": true,
+        "ignore_missing": true
+      }
+    },
+    {
+      "rename": {
+        "if": "ctx?.temp?.query != null",
+        "field": "temp.query",
+        "target_field": "elasticsearch.uam.search.query",
+        "ignore_failure": true,
+        "ignore_missing": true
+      }
+    },
+    {
+      "convert": {
+        "field": "temp.aggs",
+        "type": "string",
+        "ignore_missing": true,
+        "if": "ctx?.temp?.aggs != null",
+        "ignore_failure": true
+      }
+    },
+    {
+      "convert": {
+        "field": "temp.aggregations",
+        "type": "string",
+        "ignore_missing": true,
+        "if": "ctx?.temp?.aggregations != null",
+        "ignore_failure": true
+      }
+    },
+    {
+      "rename": {
+        "if": "ctx?.temp?.aggs != null",
+        "field": "temp.aggs",
+        "target_field": "elasticsearch.uam.search.aggregations",
+        "ignore_failure": true,
+        "ignore_missing": true
+      }
+    },
+    {
+      "rename": {
+        "field": "temp.aggregations",
+        "target_field": "elasticsearch.uam.search.aggregations",
+        "ignore_missing": true,
+        "if": "ctx?.temp?.aggregations != null",
+        "ignore_failure": true
+      }
+    },
+    {
+      "remove": {
+        "field": "temp",
+        "ignore_failure": true,
+        "ignore_missing": true
+      }
+    },
+    {
+      "grok": {
+        "field": "elasticsearch.uam.search.query",
+        "patterns": [
+          "%{GREEDYDATA}, gte=%{TIMESTAMP_ISO8601:elasticsearch.uam.search.date_range.from}, lte=%{TIMESTAMP_ISO8601:elasticsearch.uam.search.date_range.to}%{GREEDYDATA}",
+          "%{GREEDYDATA}, gte=%{NUMBER:elasticsearch.uam.search.date_range.from}, lte=%{NUMBER:elasticsearch.uam.search.date_range.to}%{GREEDYDATA}",
+          "%{GREEDYDATA}gte=%{TIMESTAMP_ISO8601:elasticsearch.uam.search.date_range.from}, lte=%{TIMESTAMP_ISO8601:elasticsearch.uam.search.date_range.to}%{GREEDYDATA}",
+          "%{GREEDYDATA}, lte=%{TIMESTAMP_ISO8601:elasticsearch.uam.search.date_range.to}, gt=%{TIMESTAMP_ISO8601:elasticsearch.uam.search.date_range.from}%{GREEDYDATA}"
+        ],
+        "ignore_missing": true,
+        "if": "ctx?.elasticsearch?.uam?.search?.query != '' && ctx?.elasticsearch?.uam?.search?.query != null",
+        "ignore_failure": true
+      }
+    },
+    {
+      "date": {
+        "field": "elasticsearch.uam.search.date_range.from",
+        "formats": [
+          "ISO8601",
+          "UNIX_MS"
+        ],
+        "target_field": "elasticsearch.uam.search.date_range.from",
+        "ignore_failure": true
+      }
+    },
+    {
+      "date": {
+        "field": "elasticsearch.uam.search.date_range.to",
+        "formats": [
+          "ISO8601",
+          "UNIX_MS"
+        ],
+        "target_field": "elasticsearch.uam.search.date_range.to",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "source": "ctx.elasticsearch.uam.search.date_range.duration = ChronoUnit.DAYS.between((ZonedDateTime.parse(ctx.elasticsearch.uam.search.date_range.from)), (ZonedDateTime.parse(ctx.elasticsearch.uam.search.date_range.to)))",
+        "if": "ctx?.elasticsearch?.uam?.search?.date_range?.from != '' && ctx?.elasticsearch?.uam?.search?.date_range?.from != null && ctx?.elasticsearch?.uam?.search?.date_range?.to != '' && ctx?.elasticsearch?.uam?.search?.date_range?.to != null",
+        "ignore_failure": true
+      }
+    },
+    {
+      "urldecode": {
+        "ignore_failure": true,
+        "field": "elasticsearch.uam.search.index",
+        "ignore_missing": true
+      }
+    },
+    {
+      "split": {
+        "ignore_failure": true,
+        "field": "elasticsearch.uam.search.index",
+        "separator": ",",
+        "ignore_missing": true
+      }
+    },
+    {
+      "set": {
+        "field": "elasticsearch.uam.application",
+        "value": "synthetics",
+        "if": "ctx.elasticsearch.uam.application == 'run%20alerting%3Axpack.synthetics.alerts.monitorStatus'",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "source": "List flatten_map(Map map) {\n    def l = [];\n    for (def e : map.entrySet()) {\n        def k = e.getKey();\n        def v = e.getValue();\n        if (v instanceof Map) {\n            flatten_map(v).stream()\n                .map(a -> [k + \".\" + a.get(0), a.get(1)])\n                .collect(Collectors.toCollection(() -> l));\n        } else if (v instanceof List && v.size() > 0) {\n            flatten_list(v, k).stream()\n                .map(a -> [a.get(0), a.get(1)])\n                .collect(Collectors.toCollection(() -> l));\n        } else {\n            l.add(flatten_leave(k, v));\n        }\n    }\n    return l;\n}\n\nList flatten_list(List list, def key) {\n    List l = [];\n    for (def e : list) {\n        if (e instanceof Map) {\n            flatten_map(e).stream()\n                .map(a -> [key + \".\" + a.get(0), a.get(1)])\n                .collect(Collectors.toCollection(() -> l));\n        } else if (e instanceof List && e.size() > 0) {\n            flatten_list(e, key).stream()\n                .map(a -> [a.get(0), a.get(1)])\n                .collect(Collectors.toCollection(() -> l));\n        } else {\n            l.add(flatten_leave(key, e));\n        }\n    }\n    return l;\n}\n\nList flatten_leave(String key, def leave_value) {\n    return [key, leave_value];\n}\n\nList query_shape_array(Map map) {\n    return flatten_map(map).stream()\n        .map(e -> e[0])\n        .sorted()\n        .collect(Collectors.toList());\n}\n\nif (ctx.http.request.body == null) {\n    ctx.http.request.body = new HashMap();\n}\nif (ctx.http.request.body.content\n == null) {\n    ctx.http.request.body.content\n = new HashMap();\n}\n\nString jsonString = ctx[\"http\"][\"request\"][\"body\"][\"content\"];\nMap map = Json.load(jsonString);\n\ndef query_shape_array = query_shape_array(map);\ndef query_shape_signature = Integer.toHexString(query_shape_array.hashCode());\nctx[\"elasticsearch\"][\"query_shape_array\"] = query_shape_array;\nctx[\"elasticsearch\"][\"query_shape_signature\"] = query_shape_signature;\n\nList flattened = flatten_map(map);\nMap flattenedMap = new HashMap();\nfor (def e : flattened) {\n    flattenedMap.put(e[0], e[1]);\n}\n\nfor (String key : query_shape_array) {\n    if (flattenedMap.containsKey(key)) {\n        ctx.elasticsearch.put(key, flattenedMap.get(key));\n    }\n}\n\nList queryTerms = [];\nfor (def entry : flattenedMap.entrySet()) {\n    String key = entry.getKey();\n    if (key.endsWith(\".query\")) {\n        queryTerms.add(entry.getValue().toString());\n    }\n}\nctx.elasticsearch.put(\"extracted_query_terms\", queryTerms);"
+      }
+    }
+  ],
+  "on_failure": [
+    {
+      "set": {
+        "description": "Record error information",
+        "field": "elasticsearch.uam.error",
+        "value": "Processor {{ _ingest.on_failure_processor_type }} with tag {{ _ingest.on_failure_processor_tag }} in pipeline {{ _ingest.on_failure_pipeline }} failed with message {{ _ingest.on_failure_message }}"
+      }
+    }
+  ]
+}
